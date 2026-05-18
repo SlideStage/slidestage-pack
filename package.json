@@ -1,0 +1,23 @@
+{
+  "name": "slidestage-pack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent skill — pack any HTML deck into a .stage container.",
+  "scripts": {
+    "fixtures": "node tests/build_fixtures.mjs",
+    "test": "node tests/build_fixtures.mjs && node tests/run_tests.mjs",
+    "detect": "node scripts/detect_framework.mjs",
+    "pack": "node scripts/pack_stage.mjs",
+    "verify": "node scripts/verify_stage.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.60.0"
+  }
+}

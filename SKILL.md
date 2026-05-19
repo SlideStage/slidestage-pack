@@ -5,7 +5,7 @@ description: 把任意 HTML 幻灯片框架（reveal.js / impress.js / html-ppt-
 
 # slidestage-pack · 把 HTML 幻灯片打包为 .stage
 
-你正在帮用户把一份 HTML 幻灯片（任意框架）打包成 `.stage` 包，供 [SlideStageLite](https://github.com/hcliu/SlideStageLite) / SlideStagePro 播放。
+你正在帮用户把一份 HTML 幻灯片（任意框架）打包成 `.stage` 包，供 [SlideStageLite](https://github.com/SlideStage/SlideStageLite) / SlideStagePro 播放。
 
 ## 0 · 触发时机
 

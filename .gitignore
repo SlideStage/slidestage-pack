@@ -1,1 +1,10 @@
 node_modules
+.DS_Store
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+.cache/

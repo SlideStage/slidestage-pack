@@ -44,8 +44,16 @@ async function buildReveal() {
 <body>
   <div class="reveal">
     <div class="slides">
-      <section><h1>Hello</h1><p>First reveal slide</p></section>
-      <section data-title="Second"><h1>Second</h1><p>Second slide</p></section>
+      <section>
+        <h1>Hello</h1>
+        <p>First reveal slide</p>
+        <aside class="notes">Welcome the audience. Mention the three takeaways.</aside>
+      </section>
+      <section data-title="Second">
+        <h1>Second</h1>
+        <p>Second slide</p>
+        <aside class="speaker-notes">Walk through the diagram left to right.</aside>
+      </section>
       <section>
         <section><h1>Vertical 1</h1><p>Stacked</p></section>
         <section><h1>Vertical 2</h1><p>Below</p></section>
@@ -56,7 +64,7 @@ async function buildReveal() {
   <script>Reveal.initialize({});</script>
 </body>
 </html>`;
-  const css = `.reveal{font-family:sans-serif}`;
+  const css = `.reveal{font-family:sans-serif}aside.notes,aside.speaker-notes{display:none}`;
   const js = `// stub reveal\nwindow.Reveal={initialize:function(){}};`;
   await write('reveal-basic/index.html', html);
   await write('reveal-basic/reveal.css', css);
@@ -118,6 +126,12 @@ async function buildHtmlPpt() {
   await write('html-ppt-skill/index.html', html);
   await write('html-ppt-skill/assets/theme.css', css);
   await write('html-ppt-skill/assets/runtime.js', js);
+  // speaker-notes/<basename>.md sidecar — basename matches the synthesized
+  // split-mode filename (`01-cover.html` → `speaker-notes/01-cover.md`).
+  await write('html-ppt-skill/speaker-notes/01-cover.md',
+    '# Cover\n\nGreet the audience and tee up the agenda.\n');
+  await write('html-ppt-skill/speaker-notes/02-two.md',
+    'Highlight the **growth** number. Pause for emphasis.\n');
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -135,7 +149,11 @@ async function buildHuashuDeckStage() {
 <body>
   <deck-stage data-testid="webcomponent-deck">
     <deck-slide data-screen-label="Cover"><h1>Cover</h1><p>WC slide 1</p></deck-slide>
-    <deck-slide data-screen-label="Two"><h1>Two</h1><p>WC slide 2</p></deck-slide>
+    <deck-slide data-screen-label="Two">
+      <h1>Two</h1>
+      <p>WC slide 2</p>
+      <template id="speaker-notes">Drive the analogy home with one concrete example.</template>
+    </deck-slide>
   </deck-stage>
   <script src="assets/deck-stage.js"></script>
 </body>
@@ -155,6 +173,10 @@ customElements.define('deck-slide', DeckSlide);
   await write('huashu-deckstage/index.html', html);
   await write('huashu-deckstage/assets/theme.css', css);
   await write('huashu-deckstage/assets/deck-stage.js', js);
+  // notes/<basename>.md sidecar — matches the synthesized split-mode filename
+  // (`01-cover.html` → `notes/01-cover.md`).
+  await write('huashu-deckstage/notes/01-cover.md',
+    'Open with the customer pain point before the solution.\n');
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -187,6 +209,11 @@ async function buildHuashuRouter() {
   await write('huashu-router/slides/01-cover.html', slide('Cover', 'Router 1'));
   await write('huashu-router/slides/02-content.html', slide('Content', 'Router 2'));
   await write('huashu-router/slides/03-finale.html', slide('Finale', 'Router 3'));
+  // <slide-dir>/<basename>.notes.md co-located sidecar
+  await write('huashu-router/slides/01-cover.notes.md',
+    'Pause for 2 seconds before clicking through. Build anticipation.\n');
+  await write('huashu-router/slides/02-content.notes.md',
+    'Three points. Hit each one in 30 seconds. Do not rabbit-hole.\n');
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -199,10 +226,11 @@ async function buildPlain() {
 <head>
   <meta charset="utf-8" />
   <title>Plain Single Page</title>
-  <style>body{display:grid;place-items:center;height:100vh;font-family:sans-serif}h1{font-size:96px}</style>
+  <style>body{display:grid;place-items:center;height:100vh;font-family:sans-serif}h1{font-size:96px}aside.notes{display:none}</style>
 </head>
 <body>
   <main><h1>Plain HTML</h1><p>No deck markup, no manifest.</p></main>
+  <aside class="notes">Inline note on a plain single-file deck — extracted in single mode.</aside>
 </body>
 </html>`;
   await write('plain.html', html);

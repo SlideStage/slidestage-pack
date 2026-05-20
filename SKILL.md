@@ -222,9 +222,84 @@ node ~/.agents/skills/slidestage-pack/scripts/verify_stage.mjs ./out.stage
 
 完整字段表见 [references/manifest-template.md](references/manifest-template.md)；格式协议规范见 [references/format-spec.md](references/format-spec.md)。
 
+> 注：`slides[].notes` 不需要手填，打包时按 [§5 Speaker Notes 自动识别](#5--speaker-notes-自动识别生成-deck-时按需放置) 的约定从源里自动抽取。
+
 ---
 
-## 5 · 常见陷阱（看到就要修）
+## 5 · Speaker Notes 自动识别（生成 deck 时按需放置）
+
+SlideStage 用「约定优于配置」自动识别 speaker notes 并填到 `manifest.slides[].notes`，**不需要作者手写 manifest**。打包工具（`pnpm convert pack` 和本 skill 的 `pack_stage.mjs`）会按下表的优先级查找，**找到第一个非空即停**。
+
+### 5.1 · 四种识别位置（优先级从高到低）
+
+| # | 位置 | 形式 | 适用场景 |
+| --- | --- | --- | --- |
+| 1 | `speaker-notes/<basename>.md` | zip 根的同名 sidecar | huashu-design 约定，作者偏好分离 notes |
+| 2 | `notes/<basename>.md` | zip 根的同名 sidecar | 通用备选 |
+| 3 | `<slide-dir>/<basename>.notes.md` | 与 slide 同目录的 `.notes.md` | 多文件 deck（router）每张 slide 一份 |
+| 4 | `<aside class="notes">…</aside>` `<aside class="speaker-notes">…</aside>` `<template id="speaker-notes">…</template>` `<template id="notes">…</template>` | 嵌入 slide HTML 内 | reveal.js 原生约定、单 HTML deck |
+
+**`<basename>` 怎么算？**
+- `single` / `wrap` / `passthrough` / `router`：basename = slide 文件的文件名去后缀（`slides/01-cover.html` → `01-cover`）
+- `split-inline` / `split-reveal` / `split-impress` / `split-webcomponent`：**合成后**的 slide 文件名去后缀（`01-cover.html` → `01-cover`）。作者若想用 sidecar 触发 split 模式的 notes，需要让 sidecar 名匹配合成规则（`pad2(index)-${slugify(title)}.md`），或者直接把 notes 嵌在源 HTML 里（推荐）。
+
+### 5.2 · 解析规则
+
+- 编码：UTF-8 markdown，CRLF → LF 归一化
+- trim 后才判定是否非空
+- 上限 `MAX_NOTES_CHARS = 16384`（~16 KB UTF-8）超出截断，防止 manifest 膨胀
+- 内联抽取时，HTML 标签 strip，空白折叠，所以 `<aside class="notes"><p>line 1</p><p>line 2</p></aside>` 会变成 `"line 1 line 2"`（如果想保留 markdown 排版，**用 sidecar 写 markdown**）
+
+### 5.3 · 各 mode 的查找路径
+
+| Mode | Sidecar 查找 entries | Inline 查找位置 | 说明 |
+| --- | --- | --- | --- |
+| `single` | 源 entries | 源 HTML 整体 | rootHtml 单文件 |
+| `wrap` | 源 entries | 源 HTML 整体（**只取第一个 aside**） | wrap 只产出 1 张 slide，所以多个内联 aside 只能拿到第一个 |
+| `split-*` | 源 entries（按合成 basename） | 合成后的 slide HTML（每张独立） | `extractInlineNotes(generatedPage) ?? findSlideNotes(entries, generatedPath)` |
+| `passthrough` | — | — | manifest.slides[].notes 直接保留源文件值（**不会重新抽取**） |
+
+### 5.4 · 给 agent 生成 deck 时的推荐姿势
+
+```
+my-deck/
+├── index.html                              # reveal/impress/inline-deck/web-component/router 任一
+├── slides/                                 # （router 模式）每张 slide 一个 HTML
+│   ├── 01-cover.html
+│   ├── 01-cover.notes.md                   # ← 推荐 #3 同目录 sidecar
+│   ├── 02-content.html
+│   └── 02-content.notes.md
+└── speaker-notes/                          # ← 或者 #1 集中放在根目录
+    ├── 01-cover.md
+    └── 02-content.md
+```
+
+或者直接嵌在 HTML 里（reveal.js 风格，最少改动）：
+
+```html
+<section>
+  <h1>Cover</h1>
+  <p>Visual content stays here.</p>
+  <aside class="notes">
+Greet the audience.
+Tee up the 3 takeaways.
+  </aside>
+</section>
+```
+
+### 5.5 · 陷阱
+
+- **wrap 模式 + 多 aside**：reveal/impress wrap 只产出 1 张 slide，多个内联 aside 只会拿到第一个。要想每张 slide 都有 notes，用 split 模式或拆成 router。
+- **split 模式 inline notes 仍可见**：split 把源 HTML 切片后没有 reveal/impress runtime 帮你 hide `<aside class="notes">`，**演讲时观众端会看到**。两种解法：
+  1. 用 sidecar（`speaker-notes/*.md` 或 `notes/*.md`），不放内联
+  2. 在源 HTML head 加 CSS：`aside.notes, aside.speaker-notes { display: none }`
+- **passthrough 不会重新抽取**：repack 一个已有 `.stage` 不会回头扫源 HTML，notes 字段保留原值。要更新 notes 就改源后重 pack。
+- **basename 大小写敏感**：`Speaker-Notes/Cover.md` 不匹配 `slides/cover.html`（小写 `speaker-notes/cover.md` 才行）。
+- **markdown 渲染**：SlideStageLite PresenterView 当前以纯文本 + 换行展示 notes；内联抽取会丢 markdown 排版。要保留 `**bold**` 等，用 sidecar。
+
+---
+
+## 6 · 常见陷阱（看到就要修）
 
 | 现象 | 原因 | 修法 |
 | --- | --- | --- |
@@ -239,7 +314,7 @@ node ~/.agents/skills/slidestage-pack/scripts/verify_stage.mjs ./out.stage
 
 ---
 
-## 6 · 工具脚本
+## 7 · 工具脚本
 
 > 全部脚本都在 `~/.agents/skills/slidestage-pack/scripts/`，可直接 `node <script> --help` 看用法。
 
@@ -268,7 +343,7 @@ npm i -g playwright && npx playwright install chromium
 
 ---
 
-## 7 · 测试样本
+## 8 · 测试样本
 
 样本在 `~/.agents/skills/slidestage-pack/tests/fixtures/`，每种框架一份最小可识别样本。可作为参考也可作为回归测试。
 
@@ -285,7 +360,7 @@ node ~/.agents/skills/slidestage-pack/tests/run_tests.mjs
 
 ---
 
-## 8 · 与 SlideStageLite 的关系
+## 9 · 与 SlideStageLite 的关系
 
 - 本 skill 产出的 `.stage` 必须能被 SlideStageLite 直接加载（loader 路径 = `src/deck/loadDeck.ts`）
 - SlideStageLite 自带的 `bin/convert.ts` 是同样的契约更全的实现 —— 在 SlideStageLite 仓库内**优先用它**
@@ -294,7 +369,7 @@ node ~/.agents/skills/slidestage-pack/tests/run_tests.mjs
 
 ---
 
-## 9 · 不做什么（边界）
+## 10 · 不做什么（边界）
 
 - 不接收 PPTX / Keynote / PDF 输入
 - 不做服务端转换（永远是本地 CLI）

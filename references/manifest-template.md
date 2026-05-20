@@ -2,6 +2,8 @@
 
 可拷贝即用的 `manifest.json` 模板，按需删字段。`pack_stage.mjs` 自动生成这些字段；本文档供你**手动写** manifest（譬如修复一个 broken deck）或**审计**自动产物时参照。
 
+> `slides[].notes` 在打包时由 packer 按 [format-spec.md § Speaker Notes](format-spec.md#speaker-notes--约定优于配置) 的约定自动抽取（4 种位置：`speaker-notes/*.md`、`notes/*.md`、`<dir>/<basename>.notes.md`、内联 `<aside class="notes">` / `<template id="speaker-notes">`）。本模板里的 notes 是**抽取后的最终值**示例，不是手填入口。
+
 ## A · 最小合法 manifest（multi-file，2 张 slide）
 
 ```json
@@ -141,7 +143,47 @@
 }
 ```
 
-## D · `offline`（mirror 后的 manifest）
+## D · Speaker Notes 抽取示例（源 → manifest）
+
+源目录布局（含全部 4 种约定，让你看 packer 怎么解析）：
+
+```
+my-deck/
+├── index.html                          # router 入口，含 window.DECK_MANIFEST
+├── slides/
+│   ├── 01-cover.html                   # 内含 <aside class="notes">Greet …</aside>
+│   ├── 02-data.html
+│   ├── 03-finale.html
+│   └── 02-data.notes.md                # ← 约定 #3：<dir>/<basename>.notes.md
+├── speaker-notes/
+│   └── 01-cover.md                     # ← 约定 #1：speaker-notes/<basename>.md（优先级高于 inline）
+└── notes/
+    └── 03-finale.md                    # ← 约定 #2：notes/<basename>.md
+```
+
+`speaker-notes/01-cover.md`：
+
+```markdown
+Greet the audience.
+Mention the 3 takeaways before clicking.
+```
+
+打包后 `manifest.json` 里的 `slides`：
+
+```json
+"slides": [
+  { "index": 1, "id": "cover",  "label": "Cover",   "file": "slides/01-cover.html",  "thumbnail": null,
+    "notes": "Greet the audience.\nMention the 3 takeaways before clicking." },
+  { "index": 2, "id": "data",   "label": "Q4 Data", "file": "slides/02-data.html",   "thumbnail": null,
+    "notes": "Walk through the chart left-to-right." },
+  { "index": 3, "id": "finale", "label": "Finale",  "file": "slides/03-finale.html", "thumbnail": null,
+    "notes": "Wrap with the ask. Drop the mic." }
+]
+```
+
+**优先级提醒**：slide 1 同时有 `speaker-notes/01-cover.md`（约定 #1）和源 HTML 内联 `<aside class="notes">`（约定 #4），**只用 #1**（sidecar 始终胜过内联）。想换回内联抽取必须删掉 sidecar。
+
+## E · `offline`（mirror 后的 manifest）
 
 仅当你跑过 `pnpm mirror` 之类的离线镜像 pass 后才写。schema 见 `format-spec.md § offline`，复杂，**不建议手写**——用 SlideStageLite 的 `pnpm mirror` 生成。
 
@@ -197,7 +239,7 @@
 | `slides[].label` | ✓ | string | |
 | `slides[].file` | ✓ | string | 包内 relative path |
 | `slides[].thumbnail` | ✓ | string \| null | 可写 null |
-| `slides[].notes` | ✓ | string \| null | 可写 null |
+| `slides[].notes` | ✓ | string \| null | 可写 null；packer 按 § Speaker Notes 自动抽取，无需手填 |
 | `slides[].duration` | ✗ | int (sec) | |
 | `slides[].transition` | ✗ | string | |
 | `fonts` | ✗ | array | 字体清单 |

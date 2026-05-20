@@ -311,6 +311,82 @@ function escapeHtml(s) {
 function pad2(n) { return String(n).padStart(2, '0'); }
 
 // ──────────────────────────────────────────────────────────────────────
+// Speaker notes (mirrors SlideStageLite/packages/core/src/converter/speakerNotes.ts)
+//
+// Convention-over-configuration — first non-empty hit wins:
+//   1. `speaker-notes/<basename>.md`     (huashu-design convention)
+//   2. `notes/<basename>.md`             (common alternative)
+//   3. `<slide-dir><basename>.notes.md`  (co-located attachment)
+//   4. `<aside class="(speaker-)?notes">…</aside>`  (reveal.js style)
+//      `<template id="(speaker-)?notes">…</template>` (scripted variants)
+//
+// Notes are UTF-8 markdown text, CRLF→LF normalized, trimmed, capped at
+// MAX_NOTES_CHARS so a runaway markdown file can't bloat the manifest.
+// Inline HTML tags are stripped + whitespace collapsed.
+// ──────────────────────────────────────────────────────────────────────
+
+export const MAX_NOTES_CHARS = 16_384;
+
+function trimNotes(raw) {
+  const normalized = String(raw).replace(/\r\n/g, '\n').trim();
+  if (!normalized) return null;
+  return normalized.length > MAX_NOTES_CHARS
+    ? normalized.slice(0, MAX_NOTES_CHARS)
+    : normalized;
+}
+
+function basenameWithoutExt(filePath) {
+  const last = filePath.split('/').pop() ?? filePath;
+  return last.replace(/\.[^./]+$/, '');
+}
+
+function dirnameWithSlash(filePath) {
+  const idx = filePath.lastIndexOf('/');
+  return idx === -1 ? '' : filePath.slice(0, idx + 1);
+}
+
+export function extractInlineNotes(html) {
+  if (!html) return null;
+  const candidates = [
+    /<aside[^>]*class\s*=\s*["'][^"']*\b(?:speaker-)?notes\b[^"']*["'][^>]*>([\s\S]*?)<\/aside>/i,
+    /<template[^>]*id\s*=\s*["'](?:speaker-notes|notes)["'][^>]*>([\s\S]*?)<\/template>/i,
+  ];
+  for (const rx of candidates) {
+    const match = rx.exec(html);
+    if (!match) continue;
+    const stripped = match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const trimmed = trimNotes(stripped);
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+export function findSlideNotes(entries, slideFile) {
+  const base = basenameWithoutExt(slideFile);
+  const dir = dirnameWithSlash(slideFile);
+
+  const sidecarPaths = [
+    `speaker-notes/${base}.md`,
+    `notes/${base}.md`,
+    `${dir}${base}.notes.md`,
+  ];
+  for (const path of sidecarPaths) {
+    const bytes = entries.get(path);
+    if (!bytes) continue;
+    const text = trimNotes(decodeUtf8(bytes));
+    if (text) return text;
+  }
+
+  const html = entries.get(slideFile);
+  if (html) {
+    const inline = extractInlineNotes(decodeUtf8(html));
+    if (inline) return inline;
+  }
+
+  return null;
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Mode dispatchers
 // ──────────────────────────────────────────────────────────────────────
 
@@ -346,7 +422,7 @@ function dispatchSingle(entries, rootHtml) {
     label: title || 'Slide 1',
     file: rootHtml,
     thumbnail: null,
-    notes: null,
+    notes: findSlideNotes(entries, rootHtml),
   };
   const packEntries = new Map();
   for (const [path, value] of entries) packEntries.set(path, value);
@@ -374,7 +450,7 @@ function dispatchWrap(entries, rootHtml, sniffKind) {
     label: title || `${sniffKind} wrapper`,
     file: rootHtml,
     thumbnail: null,
-    notes: null,
+    notes: findSlideNotes(entries, rootHtml),
   };
   const packEntries = new Map();
   for (const [path, value] of entries) packEntries.set(path, value);
@@ -425,7 +501,7 @@ function dispatchSplitInline(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: null,
+      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
     };
   });
   return { slides, packEntries, warnings };
@@ -468,7 +544,7 @@ function dispatchSplitReveal(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: null,
+      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
     };
   });
   return {
@@ -513,7 +589,7 @@ function dispatchSplitImpress(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: null,
+      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
     };
   });
   return {
@@ -557,7 +633,7 @@ function dispatchSplitWebComponent(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: null,
+      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
     };
   });
   return { slides, packEntries, warnings: [] };
@@ -595,7 +671,7 @@ function dispatchSplitRouter(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: null,
+      notes: findSlideNotes(entries, filePath),
     });
   });
   return { slides, packEntries, warnings };

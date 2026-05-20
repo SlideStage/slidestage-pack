@@ -30,6 +30,25 @@ const FIX_DIR = resolve(__dirname, 'fixtures');
 const OUT_DIR = resolve(__dirname, 'out');
 const VERIFY_SCRIPT = resolve(__dirname, '..', 'scripts', 'verify_stage.mjs');
 
+// Helper: assert manifest.slides[i].notes for each expected entry. Each
+// expectation is either:
+//   • a string → notes must start with that substring (trimmed contains)
+//   • null     → notes must be null
+//   • undefined→ skip (don't check that slide)
+function assertNotes(manifest, expectations) {
+  expectations.forEach((expected, i) => {
+    if (expected === undefined) return;
+    const actual = manifest.slides[i]?.notes ?? null;
+    if (expected === null) {
+      assert(actual === null,
+        `slides[${i}].notes expected null, got ${JSON.stringify(actual)}`);
+    } else {
+      assert(typeof actual === 'string' && actual.includes(expected),
+        `slides[${i}].notes expected to include ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    }
+  });
+}
+
 const TESTS = [
   {
     name: 'reveal-basic (default → wrap)',
@@ -41,6 +60,9 @@ const TESTS = [
       assert(manifest.architecture === 'single-file-html', 'reveal wrap should produce single-file-html');
       assert(Array.isArray(manifest.compat?.requires) && manifest.compat.requires.length > 0,
         'reveal wrap should populate compat.requires');
+      // Wrap mode keeps the whole reveal HTML; inline note extraction grabs
+      // the FIRST <aside class="notes"> it finds (slide 1's note).
+      assertNotes(manifest, ['Welcome the audience']);
     },
   },
   {
@@ -54,6 +76,14 @@ const TESTS = [
     minSlides: 3,
     extra: (manifest) => {
       assert(manifest.architecture === 'multi-file', 'reveal split should produce multi-file');
+      // Split mode: inline notes inside each generated slide HTML.
+      // slide 1 = <aside class="notes">; slide 2 = <aside class="speaker-notes">;
+      // slide 3 = vertical stack with no notes.
+      assertNotes(manifest, [
+        'Welcome the audience',
+        'Walk through the diagram',
+        null,
+      ]);
     },
   },
   {
@@ -62,6 +92,10 @@ const TESTS = [
     expectKind: 'impress',
     expectMode: 'wrap',
     minSlides: 1,
+    extra: (manifest) => {
+      // No notes anywhere in the impress fixture.
+      assertNotes(manifest, [null]);
+    },
   },
   {
     name: 'impress-basic (--mode split)',
@@ -70,6 +104,9 @@ const TESTS = [
     expectKind: 'impress',
     expectMode: 'split',
     minSlides: 3,
+    extra: (manifest) => {
+      assertNotes(manifest, [null, null, null]);
+    },
   },
   {
     name: 'html-ppt-skill (default → split)',
@@ -79,6 +116,12 @@ const TESTS = [
     minSlides: 3,
     extra: (manifest) => {
       assert(manifest.architecture === 'multi-file', 'inline-deck split should produce multi-file');
+      // speaker-notes/<basename>.md sidecar by synthesized filename.
+      assertNotes(manifest, [
+        'Greet the audience',
+        'Highlight the **growth**',
+        null,
+      ]);
     },
   },
   {
@@ -87,6 +130,13 @@ const TESTS = [
     expectKind: 'webcomponent-deck',
     expectMode: 'split',
     minSlides: 2,
+    extra: (manifest) => {
+      // slide 1 from notes/01-cover.md sidecar; slide 2 from inline <template id="speaker-notes">.
+      assertNotes(manifest, [
+        'Open with the customer pain point',
+        'Drive the analogy home',
+      ]);
+    },
   },
   {
     name: 'huashu-router (default → split)',
@@ -94,6 +144,14 @@ const TESTS = [
     expectKind: 'router-html',
     expectMode: 'split',
     minSlides: 3,
+    extra: (manifest) => {
+      // <slide-dir>/<basename>.notes.md co-located sidecar.
+      assertNotes(manifest, [
+        'Pause for 2 seconds',
+        'Three points',
+        null,
+      ]);
+    },
   },
   {
     name: 'plain.html (default → single)',
@@ -101,6 +159,11 @@ const TESTS = [
     expectKind: 'plain-html',
     expectMode: 'single',
     minSlides: 1,
+    extra: (manifest) => {
+      // Single-file source → readSingleHtml loads only the .html; inline
+      // <aside class="notes"> still extracts.
+      assertNotes(manifest, ['Inline note on a plain single-file deck']);
+    },
   },
   {
     name: 'slidestage-passthrough.stage (passthrough)',
@@ -109,6 +172,11 @@ const TESTS = [
     expectMode: 'passthrough',
     minSlides: 2,
     skipIfMissing: true,
+    extra: (manifest) => {
+      // Passthrough preserves the source manifest verbatim, which carries
+      // notes: null in the fixture.
+      assertNotes(manifest, [null, null]);
+    },
   },
 ];
 

@@ -13,13 +13,18 @@
   ├── manifest.json                    # required
   ├── slides/                          # any path is fine — manifest 决定
   │   ├── 01-cover.html
+  │   ├── 01-cover.notes.md            # optional — co-located speaker notes (§ Speaker Notes)
   │   └── 02-content.html
   ├── thumbnails/                      # optional
   │   ├── 01.png
   │   └── 02.png
   ├── shared/tokens.css                # optional shared CSS / fonts
   ├── assets/                          # optional media
-  ├── speaker-notes.json               # optional
+  ├── speaker-notes/                   # optional — sidecar markdown by slide basename
+  │   ├── 01-cover.md
+  │   └── 02-content.md
+  ├── notes/                           # optional — common alternative sidecar dir
+  │   └── 01-cover.md
   ├── index.html                       # optional local fallback (ignored by platform)
   └── presenter_tools.js               # optional local fallback (ignored by platform)
   ```
@@ -125,6 +130,28 @@
 ### `offline` — 离线镜像审计
 
 完整 schema 见 `FILE_FORMAT.md § offline`。打包脚本不自动写这个字段，需要离线包请用 SlideStageLite 的 `pnpm mirror`。
+
+## Speaker Notes — 约定优于配置
+
+`slides[].notes` 是 `string | null`。**作者不需要手填 manifest** —— 打包工具（`pnpm convert pack` 和 skill 的 `pack_stage.mjs`）会按下表优先级从源里自动抽取，**找到第一个非空即停**。
+
+| # | 位置 | 形式 | 备注 |
+| --- | --- | --- | --- |
+| 1 | `speaker-notes/<basename>.md` | zip 根 sidecar | huashu-design 约定 |
+| 2 | `notes/<basename>.md` | zip 根 sidecar | 通用备选 |
+| 3 | `<slide-dir>/<basename>.notes.md` | 与 slide 同目录 sidecar | router / multi-file deck 友好 |
+| 4 | `<aside class="notes">…</aside>` `<aside class="speaker-notes">…</aside>` `<template id="speaker-notes">…</template>` `<template id="notes">…</template>` | slide HTML 内联 | reveal.js 风格 |
+
+**`<basename>`** = slide 文件名去后缀。对 split 模式，basename 是**合成后**的文件名（`01-cover.html` → `01-cover`），而不是源里的 `<section>` data-title。
+
+**解析约束**：
+- UTF-8 markdown，CRLF → LF 归一化
+- trim 后非空才算命中
+- 上限 `16384` chars（~16 KB UTF-8），超出截断
+- 内联抽取时 HTML 标签 strip + 空白折叠（要保留 markdown 排版用 sidecar）
+- `passthrough` 模式**不会重新抽取**，原 manifest 里的 `notes` 字段直接保留
+
+**陷阱**：split 模式产出的 slide HTML 没有 reveal/impress runtime，内联 `<aside class="notes">` 会**对观众可见**。解法：用 sidecar，或在源 HTML head 加 `aside.notes, aside.speaker-notes { display: none }`。
 
 ## Size 限制
 

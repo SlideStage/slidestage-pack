@@ -46,7 +46,7 @@ import {
 } from './detect_framework.mjs';
 
 const PACKER_NAME = 'slidestage-pack-skill';
-const PACKER_VERSION = '0.1.0';
+const PACKER_VERSION = '0.2.0';
 
 const SIZE_LIMITS = {
   packMax: 200 * 1024 * 1024,
@@ -263,15 +263,31 @@ function readAttr(attrs, name) {
 }
 
 function firstH1Text(html) {
-  const m = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
-  if (!m) return null;
-  const text = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-  return text || null;
+  // Try h1 → h2 → h3 in order (reveal.js demos heavily use <h2>/<h3>;
+  // lewislulu and impress use <h1>; both work).
+  for (const tag of ['h1', 'h2', 'h3']) {
+    const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
+    const m = re.exec(html);
+    if (!m) continue;
+    const text = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    if (text) return text;
+  }
+  return null;
 }
 
 function extractHead(html) {
   const m = /<head\b[^>]*>([\s\S]*?)<\/head>/i.exec(html);
   return m ? m[1] : '';
+}
+
+export function extractHtmlAttrs(html) {
+  const m = /<html\b([^>]*)>/i.exec(html);
+  return m ? m[1].trim() : '';
+}
+
+export function extractBodyAttrs(html) {
+  const m = /<body\b([^>]*)>/i.exec(html);
+  return m ? m[1].trim() : '';
 }
 
 function stripRuntimeScripts(headOrHtml) {
@@ -282,20 +298,29 @@ function stripRuntimeScripts(headOrHtml) {
     .replace(/<script[^>]*>[\s\S]*?customElements\.define\s*\(\s*['"](deck-stage|deck-slide)['"][\s\S]*?<\/script>/gi, '');
 }
 
-function buildSlidePage({ pageTitle, head, body }) {
+// Hide inline speaker-notes elements after the runtime that originally hid
+// them (reveal.js / lewislulu runtime.js / huashu deck-stage) is stripped in
+// split mode. Without this, source-embedded <aside class="notes"> /
+// <div class="notes"> blocks become audience-visible chrome.
+const HIDE_INLINE_NOTES_STYLE = '<style data-injected-by="slidestage-pack">aside.notes,aside.speaker-notes,div.notes,div.speaker-notes,template#notes,template#speaker-notes{display:none!important}</style>';
+
+function buildSlidePage({ pageTitle, head, body, htmlAttrs, bodyAttrs }) {
   const hasCharset = /<meta\b[^>]*\bcharset\s*=/i.test(head);
   const hasTitle = /<title\b/i.test(head);
   const extraHead = [
     hasCharset ? '' : '    <meta charset="utf-8" />',
     !hasTitle && pageTitle ? `    <title>${escapeHtml(pageTitle)}</title>` : '',
   ].filter(Boolean).join('\n');
+  const htmlOpen = htmlAttrs ? `<html ${htmlAttrs}>` : '<html>';
+  const bodyOpen = bodyAttrs ? `<body ${bodyAttrs}>` : '<body>';
   return `<!doctype html>
-<html>
+${htmlOpen}
   <head>
 ${extraHead}
 ${head}
+    ${HIDE_INLINE_NOTES_STYLE}
   </head>
-  <body>
+  ${bodyOpen}
 ${body}
   </body>
 </html>
@@ -347,9 +372,16 @@ function dirnameWithSlash(filePath) {
 
 export function extractInlineNotes(html) {
   if (!html) return null;
+  // Order matters: <aside> first (reveal.js + lewislulu presenter-mode style),
+  // then <template> (scripted variants), then <div class="notes">
+  // (lewislulu deck.html / single-page/cover.html default style). The div
+  // pattern is non-greedy and will match the *first* closing </div>; if a
+  // notes block contains nested <div>s the match will be truncated, but
+  // lewislulu's default authoring style is a single flat paragraph.
   const candidates = [
     /<aside[^>]*class\s*=\s*["'][^"']*\b(?:speaker-)?notes\b[^"']*["'][^>]*>([\s\S]*?)<\/aside>/i,
     /<template[^>]*id\s*=\s*["'](?:speaker-notes|notes)["'][^>]*>([\s\S]*?)<\/template>/i,
+    /<div[^>]*class\s*=\s*["'][^"']*\b(?:speaker-)?notes\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i,
   ];
   for (const rx of candidates) {
     const match = rx.exec(html);
@@ -471,6 +503,8 @@ function dispatchWrap(entries, rootHtml, sniffKind) {
 function dispatchSplitInline(entries, rootHtml) {
   const html = decodeUtf8(entries.get(rootHtml));
   const head = stripRuntimeScripts(extractHead(html));
+  const htmlAttrs = extractHtmlAttrs(html);
+  const bodyAttrs = extractBodyAttrs(html);
   const sections = findTopLevelBlocks(html, 'section', (attrs) => hasClass(attrs, 'slide'));
   const warnings = [];
   if (sections.length === 0) {
@@ -483,16 +517,20 @@ function dispatchSplitInline(entries, rootHtml) {
     if (path === rootHtml) continue;
     packEntries.set(path, value);
   }
+  let anyInlineScript = false;
   const slides = sections.map((sec, i) => {
     const idx = i + 1;
     const label = readAttr(sec.attrs, 'data-title') || firstH1Text(sec.inner) || `Slide ${idx}`;
     const slug = slugify(label) || `slide-${idx}`;
     const filename = `${pad2(idx)}-${slug}.html`;
     const filePath = baseDir ? `${baseDir}/${filename}` : filename;
+    if (/<script\b/i.test(sec.outer)) anyInlineScript = true;
     const page = buildSlidePage({
       pageTitle: label,
       head,
       body: `    ${sec.outer}\n`,
+      htmlAttrs,
+      bodyAttrs,
     });
     packEntries.set(filePath, bytesFromString(page));
     return {
@@ -501,21 +539,35 @@ function dispatchSplitInline(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
+      notes: extractInlineNotes(sec.outer) ?? findSlideNotes(entries, filePath),
     };
   });
-  return { slides, packEntries, warnings };
+  const compat = anyInlineScript
+    ? {
+        requires: ['same-origin-storage'],
+        notes: 'One or more split slides contain inline <script> blocks. Granting same-origin-storage lets that author code run inside the platform iframe.',
+      }
+    : null;
+  return { slides, packEntries, warnings, compat };
 }
 
 function dispatchSplitReveal(entries, rootHtml) {
   const html = decodeUtf8(entries.get(rootHtml));
   // reveal: <div class="reveal"><div class="slides">...<section>...</section></div></div>
-  const slidesContainer = /<div\b[^>]*\bclass\s*=\s*("[^"]*\bslides\b[^"]*"|'[^']*\bslides\b[^']*')[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i.exec(html);
-  if (!slidesContainer) {
-    return { slides: [], packEntries: new Map(), warnings: ['[split:reveal] could not locate .reveal > .slides container'] };
+  // Use balanced tag scanner because non-greedy regex breaks on nested
+  // <div>s inside slides (vertical stacks, code blocks, demos).
+  const revealBlocks = findTopLevelBlocks(html, 'div', (attrs) => hasClass(attrs, 'reveal'));
+  if (revealBlocks.length === 0) {
+    return { slides: [], packEntries: new Map(), warnings: ['[split:reveal] could not locate <div class="reveal"> container'] };
   }
-  const inner = slidesContainer[2];
+  const slidesBlocks = findTopLevelBlocks(revealBlocks[0].inner, 'div', (attrs) => hasClass(attrs, 'slides'));
+  if (slidesBlocks.length === 0) {
+    return { slides: [], packEntries: new Map(), warnings: ['[split:reveal] could not locate <div class="slides"> inside .reveal'] };
+  }
+  const inner = slidesBlocks[0].inner;
   const head = stripRuntimeScripts(extractHead(html));
+  const htmlAttrs = extractHtmlAttrs(html);
+  const bodyAttrs = extractBodyAttrs(html);
   const sections = findTopLevelBlocks(inner, 'section', null);
   if (sections.length === 0) {
     return { slides: [], packEntries: new Map(), warnings: ['[split:reveal] no <section> children inside .slides'] };
@@ -526,16 +578,20 @@ function dispatchSplitReveal(entries, rootHtml) {
     if (path === rootHtml) continue;
     packEntries.set(path, value);
   }
+  let anyInlineScript = false;
   const slides = sections.map((sec, i) => {
     const idx = i + 1;
     const label = firstH1Text(sec.inner) || readAttr(sec.attrs, 'data-title') || `Slide ${idx}`;
     const slug = slugify(label) || `slide-${idx}`;
     const filename = `${pad2(idx)}-${slug}.html`;
     const filePath = baseDir ? `${baseDir}/${filename}` : filename;
+    if (/<script\b/i.test(sec.outer)) anyInlineScript = true;
     const page = buildSlidePage({
       pageTitle: label,
       head,
       body: `    <div class="reveal"><div class="slides">${sec.outer}</div></div>\n`,
+      htmlAttrs,
+      bodyAttrs,
     });
     packEntries.set(filePath, bytesFromString(page));
     return {
@@ -544,19 +600,28 @@ function dispatchSplitReveal(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
+      notes: extractInlineNotes(sec.outer) ?? findSlideNotes(entries, filePath),
     };
   });
+  const compat = anyInlineScript
+    ? {
+        requires: ['same-origin-storage'],
+        notes: 'One or more split slides contain inline <script> blocks. Granting same-origin-storage lets that author code run inside the platform iframe.',
+      }
+    : null;
   return {
     slides,
     packEntries,
     warnings: ['[split:reveal] fragments and transitions are lost in split mode; use --mode wrap to preserve them'],
+    compat,
   };
 }
 
 function dispatchSplitImpress(entries, rootHtml) {
   const html = decodeUtf8(entries.get(rootHtml));
   const head = stripRuntimeScripts(extractHead(html));
+  const htmlAttrs = extractHtmlAttrs(html);
+  const bodyAttrs = extractBodyAttrs(html);
   // Strip the outer <div id="impress"> wrapper so step divs are top-level.
   const impressMatch = /<div\b[^>]*\bid\s*=\s*("impress"|'impress')[^>]*>([\s\S]*)<\/div>/i.exec(html);
   const scope = impressMatch ? impressMatch[2] : html;
@@ -570,6 +635,7 @@ function dispatchSplitImpress(entries, rootHtml) {
     if (path === rootHtml) continue;
     packEntries.set(path, value);
   }
+  let anyInlineScript = false;
   const slides = steps.map((step, i) => {
     const idx = i + 1;
     const stepId = readAttr(step.attrs, 'id');
@@ -577,10 +643,13 @@ function dispatchSplitImpress(entries, rootHtml) {
     const slug = slugify(label) || `step-${idx}`;
     const filename = `${pad2(idx)}-${slug}.html`;
     const filePath = baseDir ? `${baseDir}/${filename}` : filename;
+    if (/<script\b/i.test(step.outer)) anyInlineScript = true;
     const page = buildSlidePage({
       pageTitle: label,
       head,
       body: `    <div id="impress">${step.outer}</div>\n`,
+      htmlAttrs,
+      bodyAttrs,
     });
     packEntries.set(filePath, bytesFromString(page));
     return {
@@ -589,19 +658,28 @@ function dispatchSplitImpress(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
+      notes: extractInlineNotes(step.outer) ?? findSlideNotes(entries, filePath),
     };
   });
+  const compat = anyInlineScript
+    ? {
+        requires: ['same-origin-storage'],
+        notes: 'One or more split slides contain inline <script> blocks. Granting same-origin-storage lets that author code run inside the platform iframe.',
+      }
+    : null;
   return {
     slides,
     packEntries,
     warnings: ['[split:impress] 3D camera transitions are lost; use --mode wrap to preserve the impress experience'],
+    compat,
   };
 }
 
 function dispatchSplitWebComponent(entries, rootHtml) {
   const html = decodeUtf8(entries.get(rootHtml));
   const head = stripRuntimeScripts(extractHead(html));
+  const htmlAttrs = extractHtmlAttrs(html);
+  const bodyAttrs = extractBodyAttrs(html);
   const slidesBlocks = findTopLevelBlocks(html, 'deck-slide', null);
   if (slidesBlocks.length === 0) {
     return { slides: [], packEntries: new Map(), warnings: ['[split:webcomponent] no <deck-slide> found'] };
@@ -612,6 +690,7 @@ function dispatchSplitWebComponent(entries, rootHtml) {
     if (path === rootHtml) continue;
     packEntries.set(path, value);
   }
+  let anyInlineScript = false;
   const slides = slidesBlocks.map((block, i) => {
     const idx = i + 1;
     const label = readAttr(block.attrs, 'data-screen-label')
@@ -621,10 +700,13 @@ function dispatchSplitWebComponent(entries, rootHtml) {
     const slug = slugify(label) || `slide-${idx}`;
     const filename = `${pad2(idx)}-${slug}.html`;
     const filePath = baseDir ? `${baseDir}/${filename}` : filename;
+    if (/<script\b/i.test(block.outer)) anyInlineScript = true;
     const page = buildSlidePage({
       pageTitle: label,
       head,
       body: `    ${block.outer}\n`,
+      htmlAttrs,
+      bodyAttrs,
     });
     packEntries.set(filePath, bytesFromString(page));
     return {
@@ -633,10 +715,16 @@ function dispatchSplitWebComponent(entries, rootHtml) {
       label,
       file: filePath,
       thumbnail: null,
-      notes: extractInlineNotes(page) ?? findSlideNotes(entries, filePath),
+      notes: extractInlineNotes(block.outer) ?? findSlideNotes(entries, filePath),
     };
   });
-  return { slides, packEntries, warnings: [] };
+  const compat = anyInlineScript
+    ? {
+        requires: ['same-origin-storage'],
+        notes: 'One or more split slides contain inline <script> blocks. Granting same-origin-storage lets that author code run inside the platform iframe.',
+      }
+    : null;
+  return { slides, packEntries, warnings: [], compat };
 }
 
 function dispatchSplitRouter(entries, rootHtml) {
@@ -1003,6 +1091,7 @@ export async function packSlideStageFromSource(args) {
     } else {
       dispatchResult = split;
       architecture = 'multi-file';
+      if (split.compat) compat = split.compat;
     }
   } else {
     throw new Error(`[pack] unknown mode: ${mode}`);

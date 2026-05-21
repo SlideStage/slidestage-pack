@@ -1,26 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-deck="reveal-basic">
 <head>
   <meta charset="utf-8" />
   <title>Reveal Basic</title>
   <link rel="stylesheet" href="reveal.css" />
 </head>
-<body>
+<body class="reveal-host">
   <div class="reveal">
     <div class="slides">
       <section>
-        <h1>Hello</h1>
-        <p>First reveal slide</p>
+        <div class="slide-inner">
+          <div class="card">
+            <h2>Hello</h2>
+            <p>First reveal slide with deeply nested <span>spans</span> and <div>divs</div>.</p>
+          </div>
+        </div>
         <aside class="notes">Welcome the audience. Mention the three takeaways.</aside>
       </section>
       <section data-title="Second">
-        <h1>Second</h1>
-        <p>Second slide</p>
+        <div class="layout"><div class="col"><h3>Second</h3></div><div class="col"><p>Two cols</p></div></div>
         <aside class="speaker-notes">Walk through the diagram left to right.</aside>
       </section>
       <section>
-        <section><h1>Vertical 1</h1><p>Stacked</p></section>
-        <section><h1>Vertical 2</h1><p>Below</p></section>
+        <section><h2>Vertical 1</h2><div class="card"><p>Stacked</p></div></section>
+        <section><h2>Vertical 2</h2><div class="card"><p>Below</p></div></section>
       </section>
     </div>
   </div>

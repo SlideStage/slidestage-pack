@@ -25,6 +25,19 @@ import { spawnSync as spawnSyncProc } from 'node:child_process';
 import { classify, loadEntries } from '../scripts/detect_framework.mjs';
 import { packSlideStageFromSource } from '../scripts/pack_stage.mjs';
 
+async function loadFflate() {
+  try { return await import('fflate'); } catch { return null; }
+}
+
+async function readSlideFromStage(stageBytes, slideFile) {
+  const fflate = await loadFflate();
+  if (!fflate) throw new Error('fflate not installed; cannot read stage zip');
+  const u = fflate.unzipSync(stageBytes);
+  const bytes = u[slideFile];
+  if (!bytes) throw new Error(`slide ${slideFile} missing from stage`);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIX_DIR = resolve(__dirname, 'fixtures');
 const OUT_DIR = resolve(__dirname, 'out');
@@ -74,8 +87,10 @@ const TESTS = [
     // 2 root sections + 1 vertical-stack section (kept together as a single slide
     // since slidestage multi-file is flat, no parent/child relationship in manifest).
     minSlides: 3,
-    extra: (manifest) => {
+    extra: (manifest, ctx) => {
       assert(manifest.architecture === 'multi-file', 'reveal split should produce multi-file');
+      assert(manifest.slides.length === 3,
+        `reveal split should produce exactly 3 slides (regression for balanced scanner), got ${manifest.slides.length}`);
       // Split mode: inline notes inside each generated slide HTML.
       // slide 1 = <aside class="notes">; slide 2 = <aside class="speaker-notes">;
       // slide 3 = vertical stack with no notes.
@@ -84,6 +99,15 @@ const TESTS = [
         'Walk through the diagram',
         null,
       ]);
+      // <html lang="en" data-deck="reveal-basic"> + <body class="reveal-host"> preserved
+      const cover = ctx.firstSlideHtml;
+      assert(/data-deck="reveal-basic"/.test(cover),
+        `<html data-deck=reveal-basic> not preserved in split slide:\n${cover.slice(0, 400)}`);
+      assert(/class="reveal-host"/.test(cover),
+        `<body class="reveal-host"> not preserved in split slide:\n${cover.slice(0, 400)}`);
+      // .reveal > .slides wrapper kept so reveal.css can still scope
+      assert(/<div class="reveal"><div class="slides">/.test(cover),
+        `.reveal > .slides wrapper not preserved in split slide:\n${cover.slice(0, 400)}`);
     },
   },
   {
@@ -122,6 +146,34 @@ const TESTS = [
         'Highlight the **growth**',
         null,
       ]);
+    },
+  },
+  {
+    name: 'lewislulu-html-ppt (split: div.notes + body class + html attrs + compat)',
+    src: 'lewislulu-html-ppt',
+    expectKind: 'inline-deck',
+    expectMode: 'split',
+    minSlides: 3,
+    extra: (manifest, ctx) => {
+      assert(manifest.architecture === 'multi-file', 'inline-deck split should produce multi-file');
+      // 1. <div class="notes"> + <aside class="notes"> both extracted
+      assertNotes(manifest, [
+        '这是 div class="notes" 形式',
+        '这是 aside class="notes" 形式',
+        null,
+      ]);
+      // 2. compat.requires populated because slide 3 has inline <script>
+      assert(Array.isArray(manifest.compat?.requires)
+        && manifest.compat.requires.includes('same-origin-storage'),
+        `expected compat.requires to include same-origin-storage, got ${JSON.stringify(manifest.compat)}`);
+      // 3. <body class="tpl-lewislulu"> and <html data-themes …> attrs preserved in split slides
+      const cover = ctx.firstSlideHtml;
+      assert(/class="tpl-lewislulu"/.test(cover),
+        `<body class="tpl-lewislulu"> not preserved in split slide:\n${cover.slice(0, 400)}`);
+      assert(/data-themes="tokyo-night,dracula,nord"/.test(cover),
+        `<html data-themes="..."> not preserved in split slide:\n${cover.slice(0, 400)}`);
+      assert(/data-injected-by="slidestage-pack"/.test(cover),
+        `injected hide-notes <style> not present in split slide head:\n${cover.slice(0, 400)}`);
     },
   },
   {
@@ -268,7 +320,14 @@ async function runOne(t) {
   }
 
   if (t.extra) {
-    try { t.extra(result.manifest); }
+    let firstSlideHtml = '';
+    try {
+      const firstFile = result.manifest.slides?.[0]?.file;
+      if (firstFile) firstSlideHtml = await readSlideFromStage(result.zipBytes, firstFile);
+    } catch (e) {
+      return { name: t.name, status: 'fail', message: `cannot read first slide: ${e.message}` };
+    }
+    try { t.extra(result.manifest, { firstSlideHtml }); }
     catch (e) { return { name: t.name, status: 'fail', message: e.message }; }
   }
 

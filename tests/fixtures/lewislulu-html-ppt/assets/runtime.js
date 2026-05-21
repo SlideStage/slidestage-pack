@@ -1,0 +1,1 @@
+(function(){var s=document.querySelectorAll('.slide');s.forEach(function(x,i){x.classList.toggle('is-active',i===0)});})();

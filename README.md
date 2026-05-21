@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/SlideStage/slidestage-pack">
+    <img src="brand/png/slidestage-pack-logo-horizontal.png" alt="slidestage-pack" width="520" />
+  </a>
+</p>
+
 # SlideStage Pack Skill
 
 这个项目是一个 Agent Skill：把已经生成好的 HTML 幻灯片打包成 `.stage` 文件，给 SlideStageLite / SlideStagePro 播放。

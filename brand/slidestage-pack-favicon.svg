@@ -1,0 +1,9 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">slidestage-pack favicon</title>
+  <desc id="desc">Small slidestage-pack stage icon.</desc>
+  <rect x="4" y="4" width="56" height="56" rx="13" fill="#111827"/>
+  <rect x="13" y="15" width="38" height="28" rx="5" fill="#F8FAFC"/>
+  <path d="M22 28L32 22L42 28V39L32 45L22 39V28Z" fill="#F59E0B" opacity="0.18"/>
+  <path d="M22 28L32 34L42 28M32 34V45M22 28L32 22L42 28V39L32 45L22 39V28Z" stroke="#10B981" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19 50H45" stroke="#F59E0B" stroke-width="4" stroke-linecap="round"/>
+</svg>

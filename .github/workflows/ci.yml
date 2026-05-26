@@ -1,0 +1,80 @@
+name: CI
+
+# Default CI gate for slidestage-pack. This repo is intentionally
+# zero-dep beyond `fflate` (required) and `playwright` (optional, never
+# installed in CI). It is consumed primarily as an Agent skill, not as
+# an npm package, so we deliberately use `npm` (built into Node) rather
+# than pnpm to keep the runner footprint minimal.
+#
+# Triggers:
+#   - Every PR targeting main.
+#   - Every push to main (catches a broken merge fast).
+#   - workflow_dispatch (manual replay button on the Actions tab).
+#
+# Matrix:
+#   Node 20 (Lite's `engines.node`, lowest supported) + Node 22 (current
+#   LTS, matches Lite's `release-windows.yml` and Pro's `engines.node`).
+#   Both must stay green or the skill cannot ship as advertised.
+#
+# Strategy:
+#   1. `npm install --omit=optional` — fflate only; skip Playwright (~200 MB
+#      of browser binaries we never run here).
+#   2. Run `node tests/run_tests.mjs` against the tracked
+#      `tests/fixtures/` set (28 files, framework sources copied from
+#      `@slidestage/spec/fixtures/sources/` via `tests/build_fixtures.mjs`
+#      whenever they need refreshing). The committed fixtures cover six
+#      frameworks plus a plain.html; the optional 10th case
+#      `slidestage-passthrough.stage` is left uncommitted and run_tests
+#      skips it gracefully (`skipIfMissing: true`).
+#   3. `test_strict_schema.mjs` and `test_use_core.mjs` rely on the
+#      not-yet-published `@slidestage/spec` and `@slidestage/core`. They
+#      are intentionally NOT run here — the local dev contract is "run
+#      them by hand after `npm install --no-save <tarball>`". This CI
+#      will be extended to invoke them once spec + core are on npm.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: run_tests.mjs (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install runtime dependency (fflate only, skip optional Playwright)
+        # `--omit=optional` keeps the install under ~5 s. We do not need
+        # Playwright browsers anywhere in this workflow.
+        run: npm ci --omit=optional
+
+      - name: Run packer tests (10 fixture-driven cases)
+        # `run_tests.mjs` calls classify → packSlideStageFromSource →
+        # verify_stage in-place for every framework fixture, asserting
+        # kind/mode/slide-count and byte-reproducibility (sha256 across
+        # two consecutive packs).
+        run: node tests/run_tests.mjs

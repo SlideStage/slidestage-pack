@@ -1,185 +1,126 @@
 # `.stage` Format Cheatsheet
 
+> **Authoritative source:** The `.stage` (`slidestage@1.0`) container
+> format is owned by the npm package
+> [`@slidestage/spec`](https://github.com/SlideStage/SlideStageLite/tree/main/packages/spec)
+> (source lives in the SlideStageLite monorepo at `packages/spec/`).
+> Manifest schema (Zod), path safety, capability registry, error
+> codes, size limits — all of that is defined there exactly once and
+> consumed by the Lite player, the Pro server, and this pack skill.
+>
+> Pass `--strict-schema` to `pack_stage.mjs` (see `../SKILL.md`) to
+> validate every produced manifest against the spec's Zod schema
+> before writing the zip. The default (zero-dependency) path keeps the
+> pack-internal `SIZE_LIMITS` / `MAX_NOTES_CHARS` literals (mirrored
+> from the spec values) and only checks size + path safety.
+>
+> Pass `--use-core` to delegate the entire detect → split → wrap → pack
+> pipeline to `@slidestage/core/converter`. With `--use-core` the
+> packer behaves byte-for-byte like the Lite repo's `pnpm convert pack`
+> (passthrough decks are even sha256-identical). Default mode keeps the
+> 8 inline dispatchers as a zero-dep agent-skill lifeline. See the
+> `--use-core` block in `../SKILL.md` for install and compat notes.
 
-## 容器
+This page exists for **pack-specific** cheatsheet content the spec
+README does not (and should not) cover: the on-disk layout the packer
+emits, the speaker-notes lookup ladder, and a fingerprint reminder.
+Everything else has moved to the spec.
 
-- `.stage` 文件 = 标准 ZIP（PK 头）
-- 包根必须有 `manifest.json`
-- 路径用 `/`，不允许 `..` / 绝对路径 / NUL / 控制符
-- 推荐布局：
+---
 
-  ```
-  deck.stage
-  ├── manifest.json                    # required
-  ├── slides/                          # any path is fine — manifest 决定
-  │   ├── 01-cover.html
-  │   ├── 01-cover.notes.md            # optional — co-located speaker notes (§ Speaker Notes)
-  │   └── 02-content.html
-  ├── thumbnails/                      # optional
-  │   ├── 01.png
-  │   └── 02.png
-  ├── shared/tokens.css                # optional shared CSS / fonts
-  ├── assets/                          # optional media
-  ├── speaker-notes/                   # optional — sidecar markdown by slide basename
-  │   ├── 01-cover.md
-  │   └── 02-content.md
-  ├── notes/                           # optional — common alternative sidecar dir
-  │   └── 01-cover.md
-  ├── index.html                       # optional local fallback (ignored by platform)
-  └── presenter_tools.js               # optional local fallback (ignored by platform)
-  ```
+## On-disk layout the packer produces
 
-## Manifest 必填字段
-
-```jsonc
-{
-  "schema": "slidestage@1.0",                              // 固定值
-  "id": "my-deck",                                       // 见下方 id 规则
-  "version": "1.0.0",                                    // 自由 string
-  "title": "Deck Title",                                 // 自由 string
-  "subtitle": null,                                       // string | null
-  "author": null,                                         // string | null
-  "description": null,                                    // string | null
-  "createdAt": "2026-01-01T00:00:00.000Z",               // ISO 8601
-  "updatedAt": "2026-01-01T00:00:00.000Z",               // ISO 8601
-  "architecture": "multi-file",                          // 枚举见下
-  "dimensions": { "width": 1920, "height": 1080 },       // 正数 finite
-  "totalSlides": 2,                                       // = slides.length
-  "slides": [                                             // 非空数组
-    {
-      "index": 1,                                         // 1..N 顺序
-      "id": "cover",                                      // string
-      "label": "Cover",                                   // string
-      "file": "slides/01-cover.html",                     // 包内路径
-      "thumbnail": null,                                  // string | null
-      "notes": null                                       // string | null
-    }
-  ]
-}
+```
+deck.stage
+├── manifest.json                    # required
+├── slides/                          # `slides[].file` is the source of truth — any path is fine
+│   ├── 01-cover.html
+│   ├── 01-cover.notes.md            # optional — co-located speaker notes (see § Speaker Notes)
+│   └── 02-content.html
+├── thumbnails/                      # optional, populated by --thumbnails
+│   ├── 01.png
+│   └── 02.png
+├── shared/tokens.css                # optional shared CSS / fonts
+├── assets/                          # optional media
+├── assets/_mirror/<cat>/<hash>.<ext># written by SlideStageLite's `pnpm mirror` pass (not by pack)
+├── speaker-notes/                   # optional — sidecar markdown by slide basename
+│   └── 01-cover.md
+├── notes/                           # optional — common alternative sidecar dir
+│   └── 01-cover.md
+├── index.html                       # optional local fallback, populated by --fallback
+└── presenter_tools.js               # optional local fallback (ignored by platform)
 ```
 
-## `architecture` 枚举
+Path rules (enforced by `@slidestage/spec`'s `normalizePackagePath`):
 
-| Value | 含义 | 文件布局 |
-| --- | --- | --- |
-| `multi-file` | 每页一个 HTML，统一在 `slides/` 下 | `slides/01.html`, `slides/02.html` |
-| `multi-file-flat` | 每页一个 HTML，不强制 `slides/` 子目录 | `decks/talk/01.html` |
-| `single-file-deckstage` | 整个 deck 是一个 HTML（含 `<deck-stage>`），但 manifest 仍按 slide 切分 | 一个 HTML，被 producer 预拆 |
-| `single-file-html` | 单 HTML 当作一张 slide（wrap/single 模式产出） | `index.html` |
+- `/` separators after normalization.
+- Relative to package root, no leading `/`.
+- No `..` segments.
+- No NUL bytes / control chars.
 
-## `id` 规则（PR-D1 之后）
+The packer rejects any source that would produce a path the spec
+would reject — there is no "loose" mode.
 
-- 1 ≤ length ≤ 128 个 Unicode 字符
-- 禁止：NUL、`/`、`\\`、`..`、控制符
-- 允许：空格、中文、Emoji、标点、大写字母
+---
 
-合法示例：`"my-deck"`, `"Acme Corp — Q4 2026 Pitch (Final)"`, `"项目演示 v2"`
+## Speaker Notes — convention over configuration
 
-## 可选字段
+`slides[].notes` is a `string | null`. **Authors do not write manifest
+notes by hand.** The packer (`pack_stage.mjs` here and `pnpm convert
+pack` in Lite) walks this lookup ladder per slide, **first non-empty
+wins**, and stops searching:
 
-### `compat.requires` — 触发 SlideStageLite 信任弹窗
-
-```jsonc
-"compat": {
-  "requires": ["same-origin-storage", "broadcast-channel", "window-open"],
-  "notes": "Runtime needs storage + popup to render faithfully"
-}
-```
-
-`requires` 已知值：
-- `same-origin-storage` — localStorage / IndexedDB / cookie
-- `broadcast-channel` — 跨 tab 通信
-- `window-open` — popup / new tab
-
-未知值会被 loader 静默丢弃。
-
-### `provenance` — 转换溯源
-
-```jsonc
-"provenance": {
-  "sourceKind": "reveal" | "impress" | "inline-deck" | "webcomponent-deck" | "router-html" | "plain-html",
-  "conversionMode": "split" | "wrap" | "single" | "passthrough",
-  "sourceEntry": "index.html",
-  "converter": { "name": "slidestage-pack-skill", "version": "0.1.0" }
-}
-```
-
-### `assets` — 资源清单
-
-```jsonc
-"assets": {
-  "totalSize": 12345,
-  "count": 3,
-  "files": [
-    { "path": "shared/tokens.css", "size": 234, "type": "style" },
-    { "path": "assets/cover.png", "size": 10240, "type": "image" }
-  ]
-}
-```
-
-### `runtime` — 平台提示
-
-```jsonc
-"runtime": {
-  "presenterTools": "platform",            // "platform" | "embedded"
-  "fallbackEntry": "index.html" | null,    // 双击演示入口
-  "capabilities": ["keyboard-nav", "speaker-notes", "annotation-overlay"]
-}
-```
-
-### `offline` — 离线镜像审计
-
-完整 schema 见 `FILE_FORMAT.md § offline`。打包脚本不自动写这个字段，需要离线包请用 SlideStageLite 的 `pnpm mirror`。
-
-## Speaker Notes — 约定优于配置
-
-`slides[].notes` 是 `string | null`。**作者不需要手填 manifest** —— 打包工具（`pnpm convert pack` 和 skill 的 `pack_stage.mjs`）会按下表优先级从源里自动抽取，**找到第一个非空即停**。
-
-| # | 位置 | 形式 | 备注 |
+| # | Location | Format | Why |
 | --- | --- | --- | --- |
-| 1 | `speaker-notes/<basename>.md` | zip 根 sidecar | huashu-design 约定 |
-| 2 | `notes/<basename>.md` | zip 根 sidecar | 通用备选 |
-| 3 | `<slide-dir>/<basename>.notes.md` | 与 slide 同目录 sidecar | router / multi-file deck 友好 |
-| 4 | `<aside class="notes">…</aside>` `<aside class="speaker-notes">…</aside>` `<template id="speaker-notes">…</template>` `<template id="notes">…</template>` | slide HTML 内联 | reveal.js 风格 |
+| 1 | `speaker-notes/<basename>.md` | zip-root sidecar | huashu-design convention |
+| 2 | `notes/<basename>.md` | zip-root sidecar | common alt |
+| 3 | `<slide-dir>/<basename>.notes.md` | co-located sidecar | router / multi-file decks |
+| 4 | `<aside class="(speaker-)?notes">`, `<template id="(speaker-)?notes">`, `<div class="(speaker-)?notes">` | inline inside slide HTML | reveal.js style |
 
-**`<basename>`** = slide 文件名去后缀。对 split 模式，basename 是**合成后**的文件名（`01-cover.html` → `01-cover`），而不是源里的 `<section>` data-title。
+`<basename>` = slide filename minus extension. For **split-mode**
+slides the basename is the *synthesized* output name
+(`01-cover.html` → `01-cover`), not the source `<section>` data-title.
 
-**解析约束**：
-- UTF-8 markdown，CRLF → LF 归一化
-- trim 后非空才算命中
-- 上限 `16384` chars（~16 KB UTF-8），超出截断
-- 内联抽取时 HTML 标签 strip + 空白折叠（要保留 markdown 排版用 sidecar）
-- `passthrough` 模式**不会重新抽取**，原 manifest 里的 `notes` 字段直接保留
+Resolution rules (also enforced by the spec):
 
-**陷阱**：split 模式产出的 slide HTML 没有 reveal/impress runtime，内联 `<aside class="notes">` 会**对观众可见**。解法：用 sidecar，或在源 HTML head 加 `aside.notes, aside.speaker-notes { display: none }`。
+- UTF-8 markdown, CRLF → LF normalized.
+- Trimmed before non-empty check.
+- Trim to `MAX_NOTES_CHARS = 16_384` chars.
+- Inline extraction strips HTML tags and collapses whitespace — to
+  preserve markdown layout, use a sidecar.
+- `passthrough` mode **does not re-extract**; whatever `notes` the
+  original manifest carries is preserved as-is.
 
-## Size 限制
+**Gotcha.** Split-mode generated slide HTML has no reveal / impress /
+huashu runtime around it, so any inline `<aside class="notes">` would
+become audience-visible chrome. Either move notes to a sidecar, or
+keep them inline and add
+`aside.notes, aside.speaker-notes { display: none }` to the source
+head — `pack_stage.mjs` injects a `<style>` that does exactly this on
+split-mode output.
 
-| 项 | 上限 |
-| --- | --- |
-| `.stage` 文件 | 200 MB |
-| 解压总大小 | 1 GB |
-| 单 entry | 100 MB |
-| 单 slide HTML | 5 MB |
-| `manifest.json` | 5 MB |
-| `slides[]` 长度 | 500 |
-| 单 slide 标注 strokes | 2,000 |
-| 单 stroke points | 10,000 |
+---
 
-## Loader 容错（不要依赖）
+## Fingerprint reminder
 
-下列两种 manifest 问题被 PR-D1 降级为 warning（loader 自动修正），但**打包脚本必须主动对齐**：
-- `totalSlides !== slides.length` → loader 用 `slides.length`
-- `slides[i].index !== i + 1` → loader 按数组顺序重编号
+SlideStageLite keys all per-deck persistence (annotations, notes,
+trust grants) by `sha256(zip bytes)`. For the packer that means:
 
-## 指纹（Fingerprint）
+- Fix every zip entry's mtime to `Date.parse(manifest.createdAt)`.
+- Fix the global zip mtime to the same value.
+- Sort entries by path before encoding.
+- Do not write any timestamp-like field outside `manifest.json`.
 
-SlideStageLite 的所有 per-deck 持久化（annotation、notes、trust grants）以 `sha256(zip bytes)` 为 key。
+`pack_stage.mjs` does all of this by default; `tests/run_tests.mjs`
+asserts byte-reproducibility on every fixture. If you fork the packer
+or invoke `fflate` directly, replicate the same recipe so a re-pack of
+identical bytes keeps the user's runtime state.
 
-**含义**：byte-identical zip → 同一指纹 → 用户的标注 / 信任授权能跨重打包保留。
+---
 
-**这要求 packer**：
-- 固定所有 zip entry 的 mtime（推荐：`Date.parse(manifest.createdAt)`）
-- 固定 zip global mtime（fflate 的 `zipSync(files, { mtime })`）
-- 用确定性的 entry 排序（按 path 字典序）
-- 不写时间戳类字段进 manifest 之外的地方
+## See also
+
+- `../SKILL.md` — packer usage, mode dispatch table, the `--strict-schema` / `--use-core` flags.
+- `framework-detection.md` — reveal / impress / html-ppt-skill / huashu-deckstage / huashu-router signatures.
+- `manifest-template.md` — minimal + full manifest examples (pack output samples).
+- `@slidestage/spec/README.md` (in the SlideStageLite monorepo) — the format contract itself.

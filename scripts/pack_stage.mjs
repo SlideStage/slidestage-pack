@@ -11,9 +11,23 @@
  *                          [--mode auto|split|wrap|single|passthrough]
  *                          [--title T] [--author A] [--id slug] [--version 1.0.0]
  *                          [--width 1920] [--height 1080]
- *                          [--thumbnails]   # requires `playwright`
- *                          [--fallback]     # write index.html + presenter_tools.js
- *                          [--strict] [--verbose] [--pretty-manifest]
+ *                          [--thumbnails]      # requires `playwright`
+ *                          [--fallback]        # write index.html + presenter_tools.js
+ *                          [--strict]          # warnings → errors
+ *                          [--strict-schema]   # requires `@slidestage/spec`; runs the
+ *                                              # canonical Zod manifest schema + the
+ *                                              # spec SIZE_LIMITS (8 fields) before
+ *                                              # writing. Hard error if spec missing.
+ *                          [--use-core]        # requires `@slidestage/core`; delegates
+ *                                              # the entire detect → split → wrap → pack
+ *                                              # pipeline to `@slidestage/core/converter`.
+ *                                              # Output goes through the Lite converter
+ *                                              # path so behaviour is byte-for-byte
+ *                                              # identical to `pnpm convert` in the Lite
+ *                                              # repo. Hard error if core missing.
+ *                                              # Incompatible with --thumbnails /
+ *                                              # --fallback (not yet ported to core).
+ *                          [--verbose] [--pretty-manifest]
  *
  * Sources detected (see scripts/detect_framework.mjs for signatures):
  *   • slidestage@1.0   → passthrough
@@ -48,6 +62,11 @@ import {
 const PACKER_NAME = 'slidestage-pack-skill';
 const PACKER_VERSION = '0.2.0';
 
+// Zero-dep fallback constants. The values mirror `@slidestage/spec`'s
+// `SIZE_LIMITS` (the canonical SoT). When `--strict-schema` is passed,
+// we replace these at runtime with the spec's 8-field superset
+// (adds `decompressedTotalMax`, `annotationStrokesPerSlideMax`,
+// `annotationPointsPerStrokeMax`). See `loadSpecOrFail()`.
 const SIZE_LIMITS = {
   packMax: 200 * 1024 * 1024,
   entryMax: 100 * 1024 * 1024,
@@ -74,6 +93,8 @@ function parseArgs(argv) {
     thumbnails: false,
     fallback: false,
     strict: false,
+    strictSchema: false,
+    useCore: false,
     verbose: false,
     prettyManifest: true,
     createdAt: null,
@@ -95,6 +116,8 @@ function parseArgs(argv) {
       case '--thumbnails': args.thumbnails = true; break;
       case '--fallback': args.fallback = true; break;
       case '--strict': args.strict = true; break;
+      case '--strict-schema': args.strictSchema = true; break;
+      case '--use-core': args.useCore = true; break;
       case '--verbose': args.verbose = true; break;
       case '--no-pretty-manifest': args.prettyManifest = false; break;
       case '--created-at': args.createdAt = argv[++i]; break;
@@ -114,7 +137,27 @@ Usage:
                          [--title T] [--author A] [--id slug] [--version 1.0.0]
                          [--width 1920] [--height 1080]
                          [--thumbnails] [--fallback]
-                         [--strict] [--verbose] [--created-at ISO8601]
+                         [--strict] [--strict-schema] [--use-core]
+                         [--verbose] [--created-at ISO8601]
+
+Flags:
+  --strict          Treat any warning emitted by the packer as a fatal error.
+  --strict-schema   Validate the final manifest against the canonical
+                    \`@slidestage/spec\` Zod schema before writing the zip,
+                    AND switch size enforcement to the spec SIZE_LIMITS
+                    (adds decompressedTotalMax). Requires \`@slidestage/spec\`
+                    to be importable from this script's resolution context.
+                    Default mode is zero-dependency and only checks the
+                    5 pack-internal SIZE_LIMITS + path safety.
+  --use-core        Delegate the entire detect → split → wrap → pack
+                    pipeline to \`@slidestage/core/converter\` so output is
+                    byte-for-byte identical to the Lite repo's
+                    \`pnpm convert pack\`. Requires \`@slidestage/core\` to be
+                    importable. Default mode keeps the zero-dependency
+                    inline dispatch (8 internal dispatch* functions).
+                    Incompatible with --thumbnails / --fallback for now
+                    (those rely on pack-only post-processing that has not
+                    been ported to core yet).
 `;
 }
 
@@ -1016,10 +1059,265 @@ function validateBeforePack({ slides, packEntries }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Strict-schema validation (opt-in, requires `@slidestage/spec`)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Dynamically import the canonical `@slidestage/spec` package. Hard-fails
+ * with an actionable error if the package is not resolvable from this
+ * script's import path — this matches the `--strict-schema` contract
+ * ("opt in, but if you opt in, we don't silently fall back").
+ *
+ * The package is only available on npm once Phase B.5 of the ecosystem
+ * plan publishes it. Until then, `dev` environments can wire it in via
+ * `pnpm link --global @slidestage/spec` from the SlideStageLite checkout
+ * (`packages/spec`). See `tests/test_strict_schema.mjs` for the test
+ * harness's setup notes.
+ */
+async function loadSpecOrFail() {
+  try {
+    return await import('@slidestage/spec');
+  } catch (e) {
+    throw new Error(
+      '[pack] --strict-schema requires `@slidestage/spec` to be importable.\n'
+      + '       Install: `npm i -D @slidestage/spec` (once published to npm)\n'
+      + '       Dev: `pnpm link --global @slidestage/spec` from SlideStageLite/packages/spec.\n'
+      + `       Underlying error: ${e?.message ?? String(e)}`,
+    );
+  }
+}
+
+/**
+ * Run the canonical spec validator over a packed manifest + entry map.
+ *
+ * 1. `spec.parseManifest(manifest)` — Zod schema check. Throws on any
+ *    structural defect (bad schema literal, missing required field,
+ *    wrong architecture enum, illegal id, etc.).
+ * 2. `spec.SIZE_LIMITS` — re-runs the 5 pack-internal size limits plus
+ *    `decompressedTotalMax` (1 GB cumulative). The annotation limits
+ *    (`annotationStrokesPerSlideMax`, `annotationPointsPerStrokeMax`)
+ *    describe runtime annotation overlay data, which pack-time never
+ *    produces, so they are not asserted here.
+ * 3. `spec.MAX_NOTES_CHARS` — re-asserts the notes cap on every slide
+ *    (pack already trims, but if a custom dispatcher slips through this
+ *    catches it).
+ *
+ * Returns a list of additional warnings (currently always empty —
+ * structural failure throws; this slot is reserved for future soft
+ * advisories so callers can stay structurally compatible).
+ */
+function validateWithSpec(manifest, packEntries, spec) {
+  spec.parseManifest(manifest);
+
+  const limits = spec.SIZE_LIMITS;
+  const errors = [];
+
+  if (Array.isArray(manifest.slides) && manifest.slides.length > limits.totalSlidesMax) {
+    errors.push(`too many slides: ${manifest.slides.length} > ${limits.totalSlidesMax}`);
+  }
+
+  let decompressedTotal = 0;
+  for (const [path, bytes] of packEntries) {
+    decompressedTotal += bytes.byteLength;
+    if (bytes.byteLength > limits.entryMax) {
+      errors.push(`entry too large: ${path} (${bytes.byteLength} > ${limits.entryMax})`);
+    }
+  }
+  if (decompressedTotal > limits.decompressedTotalMax) {
+    errors.push(
+      `decompressed total too large: ${decompressedTotal} > ${limits.decompressedTotalMax}`,
+    );
+  }
+
+  for (const slide of manifest.slides ?? []) {
+    const bytes = packEntries.get(slide.file);
+    if (bytes && bytes.byteLength > limits.slideHtmlMax) {
+      errors.push(`slide HTML too large: ${slide.file} (${bytes.byteLength} > ${limits.slideHtmlMax})`);
+    }
+    if (typeof slide.notes === 'string' && slide.notes.length > spec.MAX_NOTES_CHARS) {
+      errors.push(`slide notes too long: ${slide.file} (${slide.notes.length} > ${spec.MAX_NOTES_CHARS})`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`[pack] --strict-schema validation failed:\n  - ${errors.join('\n  - ')}`);
+  }
+
+  return [];
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Core delegate (`--use-core`)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Try to lazily import `@slidestage/core/converter`. We only call this
+ * inside the `--use-core` code path so the default (zero-dep) packer
+ * has no static dependency on `@slidestage/core`.
+ *
+ * Resolution behaviour mirrors `loadSpecOrFail`: hard error with dev
+ * install hints so opt-in users aren't surprised by a silent fallback
+ * to the inline dispatch path (which would defeat the point of asking
+ * for the canonical Lite converter behaviour).
+ */
+async function loadCoreOrFail() {
+  try {
+    return await import('@slidestage/core/converter');
+  } catch (e) {
+    throw new Error(
+      '[pack] --use-core requires `@slidestage/core` to be importable.\n'
+      + '       Install:\n'
+      + '         - npm:  `npm i -D @slidestage/core@^0.1.1`\n'
+      + '         - pnpm: `pnpm add -D @slidestage/core@^0.1.1`\n'
+      + '       Dev (from a Lite checkout):\n'
+      + '         cd ../SlideStageLite && pnpm -r build\n'
+      + '         cd packages/core && pnpm pack --pack-destination /tmp\n'
+      + '         cd -; npm install /tmp/slidestage-core-0.1.1.tgz --no-save\n'
+      + `       Underlying error: ${e?.message ?? String(e)}`,
+    );
+  }
+}
+
+function formatConvertWarning(w) {
+  // ConvertReport.warnings is a tagged union over kinds defined in
+  // `@slidestage/core/converter/report.ts`. Render each kind to the
+  // string shape pack already uses in its warnings[] channel so the
+  // JSON summary and --strict gating stay consistent across paths.
+  if (!w || typeof w !== 'object') return String(w ?? '');
+  switch (w.kind) {
+    case 'note':
+      return `[core] ${w.message}`;
+    case 'runtime-dropped':
+      return `[core] runtime-dropped: ${w.reason}`;
+    case 'fallback-mode':
+      return `[core] fallback-mode: ${w.from} → ${w.to} (${w.reason})`;
+    case 'router-missing-entry':
+      return `[core] router missing entry: ${w.file}`;
+    case 'mirror-skipped':
+      return `[core] mirror skipped: ${w.url} (${w.reason})`;
+    default:
+      return `[core] ${JSON.stringify(w)}`;
+  }
+}
+
+function modeForCore(mode) {
+  // pack's 'auto' = "let sniffer pick". Core's ConvertOptions.mode is
+  // optional; omitting it triggers `defaultModeBySniff[kind]` inside the
+  // converter, which is exactly the semantic of pack's 'auto'.
+  if (mode === 'auto' || !mode) return undefined;
+  return mode;
+}
+
+/**
+ * Pack a deck source by delegating to `@slidestage/core/converter`.
+ *
+ * Why: `@slidestage/core/converter` is the authoritative converter
+ * (extracted in Phase C.1 + tested in C.2). Routing pack through it
+ * lets agent skill users opt into "exactly what Lite would output" with
+ * one flag, and gives Phase C.4 a real cross-validation harness without
+ * us having to rewrite every dispatch* function in pack first.
+ *
+ * Non-goals (intentionally not supported when `--use-core` is set):
+ * - `--thumbnails`: core does not own a Playwright renderer; pack's
+ *   `generateThumbnails` operates on the post-dispatch packEntries map
+ *   before zipping. Bolting that on top of a finished `.stage` would
+ *   require unzip + rewrite + repack, which defeats the byte-equivalence
+ *   point. Use the inline path or generate thumbnails in a separate
+ *   step.
+ * - `--fallback`: similarly pack-only post-processing
+ *   (`buildFallbackIndex`).
+ *
+ * Both are rejected up front so users get a clear error rather than a
+ * silent feature drop.
+ */
+async function packViaCoreDelegate(args) {
+  if (args.thumbnails) {
+    throw new Error(
+      '[pack] --use-core is incompatible with --thumbnails (thumbnails are pack-only post-processing).',
+    );
+  }
+  if (args.fallback) {
+    throw new Error(
+      '[pack] --use-core is incompatible with --fallback (fallback index is pack-only post-processing).',
+    );
+  }
+
+  const core = await loadCoreOrFail();
+  const sourcePath = resolve(args.src);
+  if (!existsSync(sourcePath)) throw new Error(`[pack] source not found: ${sourcePath}`);
+
+  const stats = await stat(sourcePath);
+  if (stats.isDirectory()) {
+    // Folder source: core has `convertFolderSource` for exactly this
+    // shape. We reuse the same `readFolderEntries` from
+    // detect_framework so file filtering (`.git`, `node_modules`, OS
+    // noise) is identical to the inline path.
+    const folderEntries = await (await import('./detect_framework.mjs')).readFolderEntries(sourcePath);
+    const result = await core.convertFolderSource(
+      {
+        entries: folderEntries,
+        name: basename(sourcePath),
+        lastModified: args.createdAt ? Date.parse(args.createdAt) : Math.floor(stats.mtimeMs),
+      },
+      buildCoreConvertOptions(args),
+    );
+    return shapeCoreResult(result);
+  }
+
+  // File source (.html / .htm / .zip / .stage). Hand raw bytes to
+  // core; its `normalizeSource` will unzip or wrap-single as needed.
+  const rawBytes = await readFile(sourcePath);
+  const bytes = new Uint8Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+  const result = await core.convertSource(
+    {
+      bytes,
+      name: basename(sourcePath),
+      lastModified: args.createdAt ? Date.parse(args.createdAt) : Math.floor(stats.mtimeMs),
+    },
+    buildCoreConvertOptions(args),
+  );
+  return shapeCoreResult(result);
+}
+
+function buildCoreConvertOptions(args) {
+  const overrides = {};
+  if (args.id) overrides.id = args.id;
+  if (args.title) overrides.title = args.title;
+  if (args.version) overrides.version = args.version;
+  if (Number.isFinite(args.width)) overrides.width = args.width;
+  if (Number.isFinite(args.height)) overrides.height = args.height;
+  return {
+    mode: modeForCore(args.mode),
+    strict: !!args.strict,
+    ...(Object.keys(overrides).length > 0 ? { manifestOverrides: overrides } : {}),
+  };
+}
+
+function shapeCoreResult(result) {
+  // Adapt core's ConvertResult to the shape pack's CLI / e2e harness
+  // expects (manifest / zipBytes / warnings[] / mode / sniffKind).
+  const warnings = (result.report?.warnings ?? []).map(formatConvertWarning);
+  return {
+    manifest: result.manifest,
+    zipBytes: result.stage,
+    warnings,
+    mode: result.report?.mode ?? 'unknown',
+    sniffKind: result.report?.sourceKind ?? 'unknown',
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Main
 // ──────────────────────────────────────────────────────────────────────
 
 export async function packSlideStageFromSource(args) {
+  // C3 opt-in: route the whole pipeline through @slidestage/core/converter
+  // when the user explicitly asks via --use-core. Default path stays
+  // 100% zero-dependency (preserves the agent-skill lifeline).
+  if (args.useCore) {
+    return packViaCoreDelegate(args);
+  }
+
   const sourcePath = resolve(args.src);
   if (!existsSync(sourcePath)) throw new Error(`[pack] source not found: ${sourcePath}`);
   const entries = await loadEntries(sourcePath);
@@ -1135,9 +1433,22 @@ async function finalize({ manifest, packEntries, warnings, args, mode, sniffKind
   if (args.strict && warnings.length > 0) {
     throw new Error(`[pack] strict mode: ${warnings.length} warning(s)\n  - ${warnings.join('\n  - ')}`);
   }
+
+  // `--strict-schema` runs the canonical Zod manifest validator + the
+  // 8-field spec SIZE_LIMITS (superset of pack's 5-field internal
+  // limits). It runs BEFORE `packZip` so a structural defect is caught
+  // without writing any bytes to disk.
+  let packMaxLimit = SIZE_LIMITS.packMax;
+  if (args.strictSchema) {
+    const spec = await loadSpecOrFail();
+    const extraWarnings = validateWithSpec(manifest, packEntries, spec);
+    warnings.push(...extraWarnings);
+    packMaxLimit = spec.SIZE_LIMITS.packMax;
+  }
+
   const zipBytes = await packZip(manifest, packEntries);
-  if (zipBytes.byteLength > SIZE_LIMITS.packMax) {
-    throw new Error(`[pack] output too large: ${zipBytes.byteLength} > ${SIZE_LIMITS.packMax}`);
+  if (zipBytes.byteLength > packMaxLimit) {
+    throw new Error(`[pack] output too large: ${zipBytes.byteLength} > ${packMaxLimit}`);
   }
   return { manifest, zipBytes, warnings, mode, sniffKind };
 }

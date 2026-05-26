@@ -120,8 +120,40 @@ node ~/.agents/skills/slidestage-pack/scripts/pack_stage.mjs \
   [--thumbnails]    # 需要 playwright
   [--fallback]      # 解压后双击 index.html 即可演讲
   [--strict]        # warnings 视为错误
+  [--strict-schema] # 用 @slidestage/spec 的 Zod 校验 + 8 字段 SIZE_LIMITS（需先安装 spec）
+  [--use-core]      # delegate 给 @slidestage/core/converter（需先安装 core；与 Lite `pnpm convert` 同源）
   [--verbose]
 ```
+
+> **`--strict-schema`** 是可选的"权威 schema 校验"模式：把最终 manifest 喂给 `@slidestage/spec` 的 Zod schema（与 SlideStageLite / SlideStagePro 完全一致的 SoT），并切换 size 上限到 spec 的 8 字段 superset（额外加 `decompressedTotalMax` = 1 GB）。打包前如果 manifest 形状不合法会直接报错，不会写出 zip。
+>
+> **要求**：本机需有可 import 的 `@slidestage/spec`。在 spec 发到 npm 之前（参见 ECOSYSTEM_IMPROVEMENT_PLAN.md §3.B.5），dev 环境可以这样准备：
+>
+> ```bash
+> cd ../SlideStageLite && pnpm --filter @slidestage/spec build
+> cd packages/spec && pnpm pack --pack-destination /tmp
+> cd <你的项目> && npm install /tmp/slidestage-spec-0.1.0.tgz --no-save
+> ```
+>
+> 没装 spec 时跑 `--strict-schema` 会 hard error（exit 4，带明确指引）；不加这个 flag 时 pack 继续走零依赖路径，与之前完全等价。
+
+> **`--use-core`**（Phase C.3 落地的新 flag）：把整条 detect → split → wrap → pack pipeline **delegate 给 `@slidestage/core/converter`**。相当于在 pack 仓内跑 Lite 仓的 `pnpm convert pack`（不需要切目录）。
+>
+> - **同源**：Lite 跟 pack 走完全同一份 splitter / sniffer / packer 实现，**reveal/impress 行为 100% 一致**。pack 自己 8 个内嵌 dispatch* 函数当作 zero-dep 后备保留。
+> - **what we keep getting**：sourceKind / mode / architecture / totalSlides / slide label set / compat.requires set 跟 inline path **语义等价**（已 8 个 fixture e2e 验过）。
+> - **what's different**：`data-injected-by` 标识符（pack 是 `"slidestage-pack"`，core 是 `"slidestage-converter"`）、entries 排序、空白等微差，所以两路 `.stage` zip 的 sha256 一般**不**一致（passthrough 是例外，两路完全 byte-identical）。pack 自己 byte-reproducibility 仍然成立（同 args 两次 delegate pack 必 sha256 一致）。
+> - **不兼容**：`--use-core` 不能跟 `--thumbnails` / `--fallback` 同用（thumbnails 用 playwright 后处理 packEntries，fallback 注入 pack-only `index.html`；这两条 pack-only post-processing 还没移植到 core）。一起加会立刻 exit 4。
+>
+> **要求**：本机需有可 import 的 `@slidestage/core`（顺带把 `@slidestage/spec` 也装上，core 依赖它）。在 core / spec 都未到 npm 之前：
+>
+> ```bash
+> cd ../SlideStageLite && pnpm -r build
+> cd packages/spec && pnpm pack --pack-destination /tmp
+> cd ../core && pnpm pack --pack-destination /tmp
+> cd <你的项目> && npm install /tmp/slidestage-spec-0.1.0.tgz /tmp/slidestage-core-0.1.1.tgz --no-save
+> ```
+>
+> 没装 core 时跑 `--use-core` 会 hard error（exit 4，带 npm / pnpm / dev-tarball 三套指引）；不加这个 flag 时 pack 继续走零依赖内嵌 dispatch，与之前完全等价。
 
 **默认行为**：
 - byte-reproducible（每文件 mtime 固定为 `manifest.createdAt`，zip 全局 mtime 同源 → `sha256(zip)` 在相同输入下稳定）
@@ -181,7 +213,7 @@ node ~/.agents/skills/slidestage-pack/scripts/verify_stage.mjs ./out.stage
 | `router-html`（huashu） | `window.DECK_MANIFEST = [...]` | **split** | 每个 manifest 条目对应文件 | 文件必须是 root HTML 的兄弟/子孙路径 |
 | `plain-html` | 单 HTML，不匹配以上 | **single** | — | 含 `<script>` 自动写 `compat.requires` |
 
-**注意**：reveal/impress 不在 `pnpm convert` 的原生识别里。`pnpm convert` 会 fallback 把它们当 `plain-html` → `single` 模式。要把它们识别为 reveal/impress 并显式 wrap，用 skill 自带的 `pack_stage.mjs`。
+**注意**：自 SlideStageLite C1（2026-05-26）起，**`@slidestage/core/converter` 原生识别 reveal/impress**（默认 wrap 保留全部 framework runtime；显式 `--mode split` 才走 splitter），跟本 skill 的 `pack_stage.mjs` 行为完全一致。也就是 `pnpm convert pack` 跟 `pack_stage.mjs` 对同一份源走相同 splitter / sniffer / packer，**两路同源**。如果想让 `pack_stage.mjs` 也走 core 的实现（而非内嵌副本），用 `--use-core` flag（详见 [Step 3](#step-3--执行打包)）。
 
 详细签名 + 拆分细节见 [references/framework-detection.md](references/framework-detection.md)。
 
@@ -455,8 +487,8 @@ node ~/.agents/skills/slidestage-pack/tests/run_tests.mjs
 
 - 本 skill 产出的 `.stage` 必须能被 SlideStageLite 直接加载（loader 路径 = `src/deck/loadDeck.ts`）
 - SlideStageLite 自带的 `bin/convert.ts` 是同样的契约更全的实现 —— 在 SlideStageLite 仓库内**优先用它**
-- 本 skill 的 `pack_stage.mjs` 是**仓库外**的备选：可独立分发，覆盖 reveal/impress 等 SlideStageLite 暂不识别的框架
-- 任何 manifest 字段变更必须先和 `SlideStageLite/docs/FILE_FORMAT.md` 对齐，再来改本 skill
+- 本 skill 的 `pack_stage.mjs` 是**仓库外**的备选：可独立分发，零依赖跑（reveal/impress/inline-deck/webcomponent/router/plain 全套 framework 都支持，跟 Lite C1 落地后的 `@slidestage/core/converter` **两路同源**——`--use-core` flag 还可显式 delegate 给 core，省去维护内嵌副本的成本）
+- 任何 manifest 字段变更必须先和 `@slidestage/spec/README.md` 对齐（spec 是格式 SoT，B4/B5 后 `SlideStageLite/docs/FILE_FORMAT.md` 已退化成 Lite player runtime 行为说明，spec README 才是字段权威），再来改本 skill
 
 ---
 

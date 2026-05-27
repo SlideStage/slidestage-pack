@@ -13,8 +13,8 @@ importers:
         version: 0.8.3
     devDependencies:
       '@slidestage/brand':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.2.0
+        version: 0.2.0
     optionalDependencies:
       playwright:
         specifier: ^1.60.0
@@ -22,9 +22,10 @@ importers:
 
 packages:
 
-  '@slidestage/brand@0.1.0':
-    resolution: {integrity: sha512-u8YBnq1vZYHLTa/nloDJInx5kof2Uaptxev7wKTquTfhnDA+I1M8FmFRqfZKhOZC5a6vw91LJU5gwpInL7GlOw==}
+  '@slidestage/brand@0.2.0':
+    resolution: {integrity: sha512-SgyDWqfQn5LE0v/FrIYOZ3yf2zWAqdgx6R53IkN2lFsP3yOfJ1oOxAuIutxGBWC+2GLq4fe/FbENoZ3Zp8AkOA==}
     engines: {node: '>=20'}
+    hasBin: true
 
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
@@ -46,7 +47,7 @@ packages:
 
 snapshots:
 
-  '@slidestage/brand@0.1.0': {}
+  '@slidestage/brand@0.2.0': {}
 
   fflate@0.8.3: {}
 

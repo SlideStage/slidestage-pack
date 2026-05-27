@@ -9,13 +9,18 @@
     "test": "node tests/build_fixtures.mjs && node tests/run_tests.mjs",
     "detect": "node scripts/detect_framework.mjs",
     "pack": "node scripts/pack_stage.mjs",
-    "verify": "node scripts/verify_stage.mjs"
+    "verify": "node scripts/verify_stage.mjs",
+    "render:ecosystem": "slidestage-render-ecosystem --target=README.md --lang=zh",
+    "check:ecosystem-readme": "slidestage-render-ecosystem --target=README.md --lang=zh --check"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@slidestage/brand": "^0.1.0"
   },
   "optionalDependencies": {
     "playwright": "^1.60.0"

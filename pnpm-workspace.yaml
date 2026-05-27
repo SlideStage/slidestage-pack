@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - '@slidestage/brand@0.1.0'

@@ -19,6 +19,10 @@
   "dependencies": {
     "fflate": "^0.8.3"
   },
+  "devDependencies": {
+    "@slidestage/spec": "^0.1.0",
+    "@slidestage/core": "^0.1.1"
+  },
   "optionalDependencies": {
     "playwright": "^1.60.0"
   }

@@ -59,29 +59,38 @@ function resolveSpecSourcesDir() {
   return null;
 }
 
-async function copySourcesFromSpec() {
+// Phase B.B2 (2026-05-27): Resolve spec BEFORE touching anything on disk.
+// Previously this script ran `reset()` first, which deleted tests/fixtures/
+// even when spec was missing — meaning a fresh `npm test` without
+// devDependencies installed would silently nuke the committed fixtures.
+// Now we probe spec first and only proceed to the destructive reset if
+// the source-of-truth is reachable.
+function failIfSpecMissing() {
   const specSourcesDir = resolveSpecSourcesDir();
-  if (!specSourcesDir) {
-    const lines = [
-      '',
-      '[build_fixtures] FATAL: @slidestage/spec is not installed (or its fixtures/sources/ directory is missing).',
-      '',
-      "  Pack's fixture authoring SoT was moved into spec in Phase C.4. To regenerate fixtures you need spec installed.",
-      '',
-      '  Install options:',
-      '    1) npm:   npm install -D @slidestage/spec',
-      '    2) pnpm:  pnpm add -D @slidestage/spec',
-      '    3) Dev tarball (until spec is on the public npm registry):',
-      '         cd ../SlideStageLite && pnpm --filter @slidestage/spec build',
-      '         cd packages/spec && pnpm pack --pack-destination /tmp',
-      '         cd ../../../slidestage-pack && npm install /tmp/slidestage-spec-0.1.0.tgz --no-save',
-      '',
-      '    Then re-run:  node tests/build_fixtures.mjs',
-      '',
-    ];
-    process.stderr.write(lines.join('\n'));
-    process.exit(4);
-  }
+  if (specSourcesDir) return specSourcesDir;
+  const lines = [
+    '',
+    '[build_fixtures] FATAL: @slidestage/spec is not installed (or its fixtures/sources/ directory is missing).',
+    '',
+    "  Pack's fixture authoring SoT lives in @slidestage/spec. Without it we cannot",
+    '  regenerate tests/fixtures/. tests/fixtures/ has NOT been modified.',
+    '',
+    '  Install options:',
+    '    1) npm:   npm install                       (spec is a regular devDep now)',
+    '    2) pnpm:  pnpm install',
+    '    3) Dev tarball (only needed if you are testing against an unpublished spec):',
+    '         cd ../SlideStageLite && pnpm --filter @slidestage/spec build',
+    '         cd packages/spec && pnpm pack --pack-destination /tmp',
+    '         cd ../../../slidestage-pack && npm install /tmp/slidestage-spec-0.1.0.tgz --no-save',
+    '',
+    '    Then re-run:  node tests/build_fixtures.mjs',
+    '',
+  ];
+  process.stderr.write(lines.join('\n'));
+  process.exit(4);
+}
+
+async function copySourcesFromSpec(specSourcesDir) {
   const entries = await readdir(specSourcesDir, { withFileTypes: true });
   for (const entry of entries) {
     const src = join(specSourcesDir, entry.name);
@@ -172,8 +181,13 @@ async function buildSlideStagePassthrough() {
 // ──────────────────────────────────────────────────────────────────────
 
 async function main() {
+  // CRITICAL ORDER (Phase B.B2): probe spec FIRST. `reset()` is destructive
+  // (rm -rf tests/fixtures/); we must not run it until we know the
+  // source-of-truth is reachable, or we'll wipe the committed fixtures
+  // on a fresh checkout that hasn't `npm install`-ed yet.
+  const specSourcesDir = failIfSpecMissing();
   await reset();
-  await copySourcesFromSpec();
+  await copySourcesFromSpec(specSourcesDir);
   await buildSlideStagePassthrough();
   process.stdout.write('\nDone.\n');
 }

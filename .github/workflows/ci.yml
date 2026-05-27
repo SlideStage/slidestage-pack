@@ -26,11 +26,14 @@ name: CI
 #      frameworks plus a plain.html; the optional 10th case
 #      `slidestage-passthrough.stage` is left uncommitted and run_tests
 #      skips it gracefully (`skipIfMissing: true`).
-#   3. `test_strict_schema.mjs` and `test_use_core.mjs` rely on the
-#      not-yet-published `@slidestage/spec` and `@slidestage/core`. They
-#      are intentionally NOT run here — the local dev contract is "run
-#      them by hand after `npm install --no-save <tarball>`". This CI
-#      will be extended to invoke them once spec + core are on npm.
+#   3. `test_strict_schema.mjs` and `test_use_core.mjs` use the published
+#      `@slidestage/spec` and `@slidestage/core` (declared as devDeps as
+#      of 2026-05-27 / Phase B.B1). `npm ci --omit=optional` above will
+#      install them. These tests are still NOT enabled in this matrix
+#      until @slidestage/core's converter sniffer ships full reveal/
+#      impress split support — running them today produces real
+#      cross-validation failures that should land in a separate PR
+#      (see ARCHITECTURE_REVIEW.md Phase B completion criteria).
 
 on:
   pull_request:

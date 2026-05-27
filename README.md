@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/SlideStage/slidestage-pack">
-    <img src="brand/png/slidestage-pack-logo-horizontal.png" alt="slidestage-pack" width="520" />
+    <img src="https://raw.githubusercontent.com/SlideStage/SlideStageLite/main/packages/brand/assets/png/slidestage-pack-logo-horizontal.png" alt="slidestage-pack" width="520" />
   </a>
 </p>
 

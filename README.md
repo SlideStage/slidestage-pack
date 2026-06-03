@@ -72,6 +72,8 @@
 
 本项目就是 `slidestage-pack` skill。它负责识别 HTML slide 框架、打包 `.stage`、校验产物。
 
+安装本 skill 可以参考下方 “安装 slidestage-pack Skill” 部分。
+
 如果你已经把本项目安装到 Agent Skills 目录，直接让 Agent 调用即可：
 
 ```text

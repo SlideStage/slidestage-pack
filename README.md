@@ -12,7 +12,7 @@
 
 1. 用 `huashu-design` 生成 HTML slides。
 2. 用 `slidestage-pack` 把 HTML slides 打包成 `.stage`。
-3. 把 `.stage` 拖进 SlideStageLite，或上传到 SlideStagePro。
+3. 把 `.stage` 拖进 [SlideStage Lite](https://lite.slidestage.dev)。
 
 ## SlideStage 全家桶
 
